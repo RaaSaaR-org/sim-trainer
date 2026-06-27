@@ -1,0 +1,53 @@
+[project]
+name = "neodem-sim-trainer"
+version = "0.1.0"
+description = "NeoDEM sim-RL trainer — polls the server for sim_rl jobs, trains a G1 navigation policy in a twin-derived MuJoCo scene, POSTs progress callbacks, and uploads a gate-consumable policy.onnx (TASK-172.C)"
+requires-python = ">=3.11"
+dependencies = [
+    # HTTP polling + S3-compatible artifact storage (shared shape with training-worker)
+    "httpx>=0.27.0",
+    "boto3>=1.34.0",
+    "numpy>=1.26.0",
+    # Simulation env (also pulled transitively from the sim_evaluator path-dep)
+    "mujoco>=3.0.0",
+    "gymnasium>=0.29.0",
+    # RL training stack (PPO navigation policy)
+    "stable-baselines3>=2.3.0",
+    "torch>=2.2.0",
+    # Policy export + the train/eval action-parity check
+    "onnx>=1.16.0",
+    "onnxruntime>=1.17.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+neodem-sim-trainer = "worker:main"
+
+# The navigation env + shared wrappers live in the sibling sim_evaluator
+# (robot-agent/hardware/sim_evaluator). It has no build-system, so rather than an
+# editable wheel dependency we resolve it on sys.path at runtime via
+# SIM_EVALUATOR_PATH (config.py) — see README. This keeps `import envs.nav_wrappers`
+# working without changing sim_evaluator's packaging.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["trainers"]
+include = ["worker.py", "server_client.py", "storage.py", "config.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: heavy RL tests (full PPO learn(), beats-random acceptance)",
+]

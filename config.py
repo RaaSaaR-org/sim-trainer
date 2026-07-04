@@ -70,8 +70,9 @@ class Config:
     # Compute
     device: str  # "mps" | "cuda" | "cpu"
 
-    # Behaviour
-    trainer_kind: str  # 'stub' | 'ppo' | 'mjx'
+    # Behaviour. 'isaac' (Isaac Lab GPU locomotion) requires a Linux/CUDA host;
+    # see trainers/isaac_ppo.py — it raises a clear error off a CUDA host.
+    trainer_kind: str  # 'stub' | 'ppo' | 'mjx' | 'isaac'
     heartbeat_interval_sec: float
 
     # sim_evaluator (navigation env + shared wrappers) — resolved on sys.path
@@ -119,7 +120,8 @@ class Config:
 
 
 def _resolve_trainer_kind() -> str:
-    """TRAINER_STUB=true forces the stub; otherwise TRAINER selects the backend."""
+    """TRAINER_STUB=true forces the stub; otherwise TRAINER selects the backend
+    ('stub' | 'ppo' | 'mjx' | 'isaac'). 'isaac' needs a Linux/CUDA Isaac host."""
     if os.environ.get("TRAINER_STUB", "false").lower() in ("1", "true", "yes"):
         return "stub"
     return os.environ.get("TRAINER", "ppo").lower()

@@ -87,8 +87,6 @@ class PpoNavTrainer(BaseSimRlTrainer):
         venv = SubprocVecEnv(env_fns)
         venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-        outer = self
-
         class _Sb3ProgressCallback(BaseCallback):
             def __init__(self):
                 super().__init__()

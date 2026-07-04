@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -176,4 +176,131 @@ def write_policy_artifacts(
         "policy.onnx": onnx_path,
         "manifest.json": manifest_path,
         **({"vecnormalize.pkl": out_dir / "vecnormalize.pkl"} if vecnorm is not None else {}),
+    }
+
+
+# ---------------------------------------------------------------------------
+# rsl_rl (Isaac Lab) artifact export
+#
+# An Isaac Lab / rsl_rl policy is NOT a stable-baselines3 model, so the SB3
+# helpers above do not apply: the actor is an ``rsl_rl`` ``ActorCritic`` and its
+# observation normalization is an ``EmpiricalNormalization`` nn.Module rather than
+# a VecNormalize ``obs_rms``. We export the *deterministic mean* action and — the
+# key move — compose the normalizer INTO the onnx graph, then write
+# ``obs_norm: null`` so the gate's existing identity path runs the raw obs. This
+# guarantees train↔eval parity by construction (the same graph runs at eval) and
+# keeps ``policy_backend.py`` untouched and formula-agnostic.
+# ---------------------------------------------------------------------------
+def export_rsl_rl_onnx(actor_critic, out_path: Path, obs_dim: int, *, normalizer=None) -> None:
+    """Export an rsl_rl actor's deterministic action to a gate onnx graph.
+
+    Input  'obs'    float32 [batch, obs_dim]  (RAW, un-normalized)
+    Output 'action' float32 [batch, action_dim]
+    If ``normalizer`` (an ``EmpiricalNormalization`` nn.Module) is given it is
+    composed into the graph, so the gate feeds raw observations and needs no
+    obs_norm reproduction. Mirrors ``export_policy_onnx``'s export options.
+    """
+    import torch as th
+
+    class _Actor(th.nn.Module):
+        def __init__(self, ac, norm):
+            super().__init__()
+            self.ac = ac
+            self.norm = norm  # nn.Module submodule (or None) — baked into the graph
+
+        def forward(self, obs):
+            x = self.norm(obs) if self.norm is not None else obs
+            return self.ac.act_inference(x)  # deterministic mean (rsl_rl API)
+
+    wrapper = _Actor(actor_critic, normalizer).eval().to("cpu")
+    dummy = th.zeros(1, obs_dim, dtype=th.float32)
+    with th.no_grad():
+        th.onnx.export(
+            wrapper,
+            dummy,
+            str(out_path),
+            input_names=["obs"],
+            output_names=["action"],
+            dynamic_axes={"obs": {0: "batch"}, "action": {0: "batch"}},
+            opset_version=17,
+            dynamo=False,  # stable TorchScript exporter, same as export_policy_onnx
+        )
+
+
+def _running_stats(normalizer) -> dict | None:
+    """Best-effort extract of an EmpiricalNormalization's running mean/var for the
+    inspectable (NOT applied) ``obs_norm_debug`` manifest block."""
+    if normalizer is None:
+        return None
+    import numpy as np
+
+    for mean_attr, var_attr in (("running_mean", "running_var"), ("mean", "var")):
+        m = getattr(normalizer, mean_attr, None)
+        v = getattr(normalizer, var_attr, None)
+        if m is None or v is None:
+            continue
+        try:
+            mm = m.detach().cpu().numpy() if hasattr(m, "detach") else np.asarray(m)
+            vv = v.detach().cpu().numpy() if hasattr(v, "detach") else np.asarray(v)
+            return {"mean": mm.astype(float).ravel().tolist(),
+                    "var": vv.astype(float).ravel().tolist()}
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def write_rsl_rl_artifacts(
+    actor_critic,
+    out_dir: Path,
+    ctx: SimRlContext,
+    *,
+    normalizer,
+    obs_dim: int,
+    obs_layout: dict,
+    action_dim: int,
+    control: dict,
+    trainer_name: str = "isaac",
+    env_kind: str = "locomotion",
+) -> dict[str, Path]:
+    """Persist policy.pt + policy.onnx + manifest.json for an rsl_rl policy.
+
+    The manifest is the sim-to-sim contract the gate reads: ``env`` selects the
+    MuJoCo eval env and ``control`` carries the physics/action mapping. ``obs_norm``
+    is null because the normalizer is baked into the onnx (gate identity path); the
+    running stats are recorded under ``obs_norm_debug`` for inspection only.
+    """
+    import torch as th
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    pt_path = out_dir / "policy.pt"
+    th.save({"actor_critic_state_dict": actor_critic.state_dict()}, str(pt_path))
+
+    onnx_path = out_dir / "policy.onnx"
+    export_rsl_rl_onnx(actor_critic, onnx_path, obs_dim, normalizer=normalizer)
+
+    manifest = {
+        "kind": "sim_rl",
+        "trainer": trainer_name,
+        "embodimentTag": ctx.embodiment_tag,
+        "env": env_kind,
+        "obs_layout": obs_layout,
+        "action_dim": action_dim,
+        "sceneId": ctx.scene_id,
+        "twinId": ctx.twin_id,
+        "control": control,
+        "vecnorm": False,
+        # Normalizer baked into the onnx graph -> the gate uses its identity path.
+        "obs_norm": None,
+        # Inspectable only (NOT applied by the gate) — for debugging obs drift.
+        "obs_norm_debug": _running_stats(normalizer),
+    }
+    manifest_path = out_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+    logger.info("Wrote rsl_rl policy artifacts to %s (%s)", out_dir, trainer_name)
+    return {
+        "policy.onnx": onnx_path,
+        "policy.pt": pt_path,
+        "manifest.json": manifest_path,
     }

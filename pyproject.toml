@@ -24,6 +24,14 @@ dev = [
     "pytest>=8.0.0",
     "ruff>=0.4.0",
 ]
+# Isaac Lab GPU RL locomotion path (TRAINER=isaac). Only the pip-installable
+# piece is pinned here; `isaaclab` / `isaacsim` are NOT PyPI wheels for this pin
+# — install them out-of-band on the Linux CUDA host via NVIDIA's Isaac Lab
+# installer (which also supplies the CUDA torch build). Do NOT add them here: the
+# base install must stay Mac-friendly. See README "GPU host deploy".
+isaac = [
+    "rsl-rl-lib==2.1.0",
+]
 
 [project.scripts]
 neodem-sim-trainer = "worker:main"

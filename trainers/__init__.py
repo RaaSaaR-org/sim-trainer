@@ -26,7 +26,13 @@ def pick_trainer(kind: str) -> BaseSimRlTrainer:
         from .mjx_ppo import MjxPpoTrainer
 
         return MjxPpoTrainer()
-    raise ValueError(f"Unknown trainer kind: {kind!r} (expected 'stub' | 'ppo' | 'mjx')")
+    if kind == "isaac":
+        from .isaac_ppo import IsaacPpoTrainer
+
+        return IsaacPpoTrainer()
+    raise ValueError(
+        f"Unknown trainer kind: {kind!r} (expected 'stub' | 'ppo' | 'mjx' | 'isaac')"
+    )
 
 
 __all__ = [
